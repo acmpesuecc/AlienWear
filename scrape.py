@@ -41,20 +41,78 @@
 # print(response.text)
 
 
-import requests, json
+# import requests, json
+# from bs4 import BeautifulSoup
+
+# headers = {'User-Agent' : 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_14_5) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/84.0.4147.89 Safari/537.36'}
+
+# s = requests.Session()
+# res = s.get("https://www.myntra.com/jeans/roadster/roadster-men-navy-blue-slim-fit-mid-rise-clean-look-jeans/2296012/buy", headers=headers, verify=False)
+
+# soup = BeautifulSoup(res.text,"lxml")
+
+# script = None
+# for s in soup.find_all("script"):
+#     if 'pdpData' in s.text:
+#         script = s.get_text(strip=True)
+#         break
+
+# print(json.loads(script[script.index('{'):]))
+
+# import requests
+# import json
+# from bs4 import BeautifulSoup
+
+# headers = {
+#     'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_14_5) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/84.0.4147.89 Safari/537.36'
+# }
+
+# s = requests.Session()
+# res = s.get("https://www.myntra.com/jeans/roadster/roadster-men-navy-blue-slim-fit-mid-rise-clean-look-jeans/2296012/buy", headers=headers, verify=False)
+
+# soup = BeautifulSoup(res.text, "lxml")
+
+# script = None
+# for s in soup.find_all("script"):
+#     if 'pdpData' in s.text:
+#         script = s.get_text(strip=True)
+#         break
+
+# json_data = json.loads(script[script.index('{'):])
+
+# image_link=json_data["pdpData"]["media"]["albums"][0]["images"][0]["imageURL"]
+
+
+import pandas as pd
+import requests
+import json
 from bs4 import BeautifulSoup
 
-headers = {'User-Agent' : 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_14_5) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/84.0.4147.89 Safari/537.36'}
+# Function to extract image link from URL
+def get_image_link(url):
+    headers = {
+        'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_14_5) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/84.0.4147.89 Safari/537.36'
+    }
+    try:
+        res = requests.get(url, headers=headers, verify=False)
+        soup = BeautifulSoup(res.text, "lxml")
+        script = None
+        for s in soup.find_all("script"):
+            if 'pdpData' in s.text:
+                script = s.get_text(strip=True)
+                break
+        json_data = json.loads(script[script.index('{'):])
+        image_link = json_data["pdpData"]["media"]["albums"][0]["images"][0]["imageURL"]
+        return image_link
+    except Exception as e:
+        print(f"Error fetching image for URL {url}: {e}")
+        return None
 
-s = requests.Session()
-res = s.get("https://www.myntra.com/jeans/roadster/roadster-men-navy-blue-slim-fit-mid-rise-clean-look-jeans/2296012/buy", headers=headers, verify=False)
+# Read CSV file into DataFrame
+df = pd.read_csv("fashionOG.csv")
 
-soup = BeautifulSoup(res.text,"lxml")
+# Apply function to each row to fetch image link
+df['ImageLink'] = df['URL'].apply(get_image_link)
 
-script = None
-for s in soup.find_all("script"):
-    if 'pdpData' in s.text:
-        script = s.get_text(strip=True)
-        break
-
-print(json.loads(script[script.index('{'):]))
+# Save the updated DataFrame with image links
+df.to_csv("updated_dataset_with_images.csv", index=False)

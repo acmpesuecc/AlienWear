@@ -3,28 +3,37 @@ import json
 
 pc = Pinecone(api_key='07aa3ce1-17c1-40cd-bfb9-677aa7ed7af3')
 
-index_name = "alien-wear-twentyfive"
+index_name = "alien-wear-threehundred"
 
-pc.create_index(
-    name=index_name,
-    dimension=1536,
-    metric="cosine",
-    spec=ServerlessSpec(
-        cloud='aws', 
-        region='us-east-1'
-    ) 
-) 
+# pc.create_index(
+#     name=index_name,
+#     dimension=1536,
+#     metric="cosine",
+#     spec=ServerlessSpec(
+#         cloud='aws', 
+#         region='us-east-1'
+#     ) 
+# ) 
 
 index = pc.Index(index_name)
 
-fp = open("../data/Final25kEmbed.json", "r")
+fp = open("../data/Final100kEmbed_pineconeready.json", "r")
 vectors = json.load(fp)
 
-index.upsert(
-    vectors=vectors,
-    namespace="ns1"
-)
+num_vectors = len(vectors)
+start_index = 69668 # Starting index for upserting
+batch_size = 300 # Size of each batch
 
+# Loop through the vectors in batches of 300
+for i in range(start_index, num_vectors, batch_size):
+    end_index = min(i + batch_size, num_vectors) # Ensure we don't go out of bounds
+    batch_vectors = vectors[i:end_index]
+    
+    # Upsert the batch of vectors
+    index.upsert(
+        vectors=batch_vectors,
+        namespace="ns1"
+    )
 fp.close()
 
 # index.upsert(

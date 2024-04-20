@@ -16,13 +16,13 @@ def process_item(item):
     return item
 
 # Load the JSON file
-with open('../data/NewMyntra25k.json') as f:
+with open('../data/Final100k.json') as f:
     data = json.load(f)
 
 # Use a ThreadPoolExecutor to process the items in parallel
 with concurrent.futures.ThreadPoolExecutor() as executor:
-    data = list(executor.map(process_item, data[:25000]))
+    data = list(executor.map(process_item, data[25000:]))
 
 # Write the updated entries to a new JSON file
-with open('../data/new_25k_items_embed.json', 'w') as f:
+with open('../data/Final100kEmbed.json', 'w') as f:
     json.dump(data, f)
