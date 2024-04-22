@@ -4,14 +4,23 @@ from pinecone import Pinecone, ServerlessSpec
 import google.generativeai as genai
 from bs4 import BeautifulSoup
 import requests
+from dotenv import load_dotenv, dotenv_values
 
-pc = Pinecone(api_key='07aa3ce1-17c1-40cd-bfb9-677aa7ed7af3')
-openAiClient = OpenAI(api_key='sk-proj-FXWeftP1rksQ54yrB2uNT3BlbkFJKRquq7MP8KkL3UqGkUT5')
-geminiClient = genai.configure(api_key='AIzaSyA--XaNMtZUWphYwP8_ZAUweNni7PZkQgk')
-model = genai.GenerativeModel('gemini-pro')
+load_dotenv()
+
+env_var = dotenv_values('.env')
+pineconeKey = env_var.get("PINECONE_API_KEY")
+openAiApiKey = env_var.get('OPENAI_API_KEY')
+geminiApiKey = env_var.get('GEMINI_API_KEY')
+
+pc = Pinecone(api_key=pineconeKey)
+openAiClient = OpenAI(api_key=openAiApiKey)
+geminiClient = genai.configure(api_key=geminiApiKey)
 
 index_name = "alien-wear-threehundred"
 index = pc.Index(index_name)
+model = genai.GenerativeModel('gemini-pro')
+
 
 def get_image_link(url):
     headers = {

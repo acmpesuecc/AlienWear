@@ -3,7 +3,7 @@ import json
 import concurrent.futures
 
 client = OpenAI(
-  api_key='sk-proj-FXWeftP1rksQ54yrB2uNT3BlbkFJKRquq7MP8KkL3UqGkUT5',
+  api_key='YOUR_API_KEY',
 )
 
 def get_embedding(text, model="text-embedding-3-small"):

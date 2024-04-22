@@ -1,7 +1,7 @@
 from pinecone import Pinecone, ServerlessSpec
 import json
 
-pc = Pinecone(api_key='07aa3ce1-17c1-40cd-bfb9-677aa7ed7af3')
+pc = Pinecone(api_key='YOUR_API_KEY')
 
 index_name = "alien-wear-threehundred"
 
