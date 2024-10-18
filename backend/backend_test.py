@@ -1,25 +1,24 @@
 import json
 from openai import OpenAI
-from pinecone import Pinecone, ServerlessSpec
-import google.generativeai as genai
-from bs4 import BeautifulSoup
+from pinecone import Pinecone
 import requests
+from bs4 import BeautifulSoup
 from dotenv import load_dotenv, dotenv_values
+from llama_cpp import Llama
 
 load_dotenv()
 
 env_var = dotenv_values('.env')
 pineconeKey = env_var.get("PINECONE_API_KEY")
 openAiApiKey = env_var.get('OPENAI_API_KEY')
-geminiApiKey = env_var.get('GEMINI_API_KEY')
 
 pc = Pinecone(api_key=pineconeKey)
 openAiClient = OpenAI(api_key=openAiApiKey)
-geminiClient = genai.configure(api_key=geminiApiKey)
 
 index_name = "alien-wear-threehundred"
 index = pc.Index(index_name)
-model = genai.GenerativeModel('gemini-pro')
+
+llama = Llama(model_path="/path/to/llama-3.2-3b-chat.ggmlv3.q4_0.bin")
 
 
 def get_image_link(url):
@@ -41,17 +40,17 @@ def get_image_link(url):
         print(f"Error fetching image for URL {url}: {e}")
         return None
 
-
 def process_products(product_info):
-    responseGen = model.generate_content(f'''{product_info}
-                                          Keeping the above vector as context, 
-                                         can you filter out the best 6 results and return me the product IDs, Image URLs of the Top 6 products in json format?''')
+    prompt = f"""
+    Here is a list of product information:
+    {product_info}
     
+    Based on this information, please filter out the best 6 results and return the product IDs and Image URLs of these top 6 products in JSON format.
+    """
     
-    respContent = responseGen.text
-
-    return respContent
-
+    response = llama(prompt, max_tokens=1000)
+    
+    return response['choices'][0]['text']
 
 def find_product_info(product_id, data):
     for item in data:
@@ -64,17 +63,17 @@ def find_product_info(product_id, data):
             }
     return None
 
-def get_embedding(query,model = "text-embedding-3-small"):
-    return openAiClient.embeddings.create(input=[query], model = model).data[0].embedding
+def get_embedding(query, model="text-embedding-3-small"):
+    return openAiClient.embeddings.create(input=[query], model=model).data[0].embedding
 
 queryEmbed = get_embedding("Kurta for girls")
 similarVectors = index.query(
-                namespace="ns1",
-                vector=queryEmbed,
-                top_k=10,
-                include_values=False,
-                include_metadata=True
-            )
+    namespace="ns1",
+    vector=queryEmbed,
+    top_k=10,
+    include_values=False,
+    include_metadata=True
+)
 
 lst = []
 for result in similarVectors['matches']:

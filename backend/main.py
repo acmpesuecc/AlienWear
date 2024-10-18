@@ -1,8 +1,7 @@
-from flask import Flask,request,jsonify
+from flask import Flask, request, jsonify
 import json
 from openai import OpenAI
-from pinecone import Pinecone, ServerlessSpec
-import google.generativeai as genai
+from pinecone import Pinecone
 from bs4 import BeautifulSoup
 import requests
 from flask_cors import CORS
@@ -11,23 +10,18 @@ from PIL import Image
 import io
 import base64
 from dotenv import load_dotenv, dotenv_values
-
+from llama_cpp import Llama
 
 load_dotenv()
 
 env_var = dotenv_values('.env')
 pineconeKey = env_var.get("PINECONE_API_KEY")
 openAiApiKey = env_var.get('OPENAI_API_KEY')
-geminiApiKey = env_var.get('GEMINI_API_KEY')
 
 pc = Pinecone(api_key=pineconeKey)
 openAiClient = OpenAI(api_key=openAiApiKey)
-geminiClient = genai.configure(api_key=geminiApiKey)
 
-
-
-model = genai.GenerativeModel('gemini-pro')
-
+llama = Llama(model_path="/path/to/llama-3.2-3b-chat.ggmlv3.q4_0.bin")
 
 index_name = "alien-wear-threehundred"
 index = pc.Index(index_name)
@@ -35,9 +29,8 @@ index = pc.Index(index_name)
 app = Flask("backend")
 CORS(app)
 
-def get_embedding(query,model = "text-embedding-3-small"):
-    return openAiClient.embeddings.create(input=[query], model = model).data[0].embedding
-
+def get_embedding(query, model="text-embedding-3-small"):
+    return openAiClient.embeddings.create(input=[query], model=model).data[0].embedding
 
 def get_image_link(url):
     headers = {
@@ -58,22 +51,17 @@ def get_image_link(url):
         print(f"Error fetching image for URL {url}: {e}")
         return None
 
+def process_products(product_info, originalQuery):
+    prompt = f"""For the Query: {originalQuery}
 
-def process_products(product_info,originalQuery):
-    responseGen = model.generate_content(f''' For the Query : {originalQuery}
-
-                                        {product_info}
-                                        Keeping the above vector as context and the following 
-                                         can you filter out the best 6 results and return me the product IDs of the Top 6 products.
-                                         Let the format be space separated product ids only.
-                                          ''')
+    {product_info}
+    Keeping the above vector as context, can you filter out the best 6 results and return me the product IDs of the Top 6 products.
+    Let the format be space separated product ids only."""
     
-    print(product_info)
-    respContent = responseGen.text
-    respContent = respContent.split()
+    response = llama(prompt, max_tokens=100)
+    respContent = response['choices'][0]['text'].strip().split()
     print(respContent)
     return respContent
-
 
 def find_product_info(product_id, data):
     for item in data:    
@@ -91,33 +79,32 @@ def find_product_info(product_id, data):
 def serializer(obj):
     if hasattr(obj, "__dict__"):
         return obj.__dict__
-    
     return str(obj)
 
-@app.route('/occasion',methods=['GET'])
+@app.route('/occasion', methods=['GET'])
 def process_occasion():
-        if request.method == 'GET':
-            originQuery = request.args.get("query","")
-            if originQuery != "":
-                queryEmbed = get_embedding(originQuery)
-                similarVectors = index.query(
-                                namespace="ns1",
-                                vector=queryEmbed,
-                                top_k=30,
-                                include_values=False,
-                                include_metadata=True
-                            )
+    if request.method == 'GET':
+        originQuery = request.args.get("query", "")
+        if originQuery != "":
+            queryEmbed = get_embedding(originQuery)
+            similarVectors = index.query(
+                namespace="ns1",
+                vector=queryEmbed,
+                top_k=30,
+                include_values=False,
+                include_metadata=True
+            )
 
-                lst = []
-                read_file = open('../data/OGMyntraFasionClothing.json', 'r')
+            lst = []
+            with open('../data/OGMyntraFasionClothing.json', 'r') as read_file:
                 data = json.load(read_file)
                 for result in similarVectors['matches']:
                     product_id_to_find = result['id']
                     product_info = find_product_info(product_id_to_find, data)
-                    product_info.pop("URL", None)
-                    product_info.pop("Description", None)
-                        
                     if product_info:
+                        product_info.pop("URL", None)
+                        product_info.pop("Description", None)
+                        
                         if product_info["DiscountOffer"] == '' or product_info["DiscountPrice (in Rs)"] == '':
                             product_info.pop("DiscountPrice (in Rs)", None)
                             product_info.pop("DiscountOffer", None)
@@ -136,63 +123,60 @@ def process_occasion():
                     else:
                         print("Product not found.")
 
-                finResp = []
-                resp = process_products(lst,originQuery)
-                print(resp)
-                for items in resp:
-                    product_info = find_product_info(items, data)
+            finResp = []
+            resp = process_products(lst, originQuery)
+            for items in resp:
+                product_info = find_product_info(items, data)
 
-                    if product_info:
-                        if product_info["DiscountOffer"] == '' or product_info["DiscountPrice (in Rs)"] == '':
-                            product_info.pop("DiscountPrice (in Rs)", None)
-                            product_info.pop("DiscountOffer", None)
-                            product_info["Price"] = int(product_info.pop("OriginalPrice (in Rs)"))
-                        else:
-                            product_info["Price"] = int(product_info["DiscountPrice (in Rs)"])
-                            product_info.pop("OriginalPrice (in Rs)", None)
-                            product_info.pop("DiscountPrice (in Rs)", None)
-                            product_info.pop("DiscountOffer", None)
+                if product_info:
+                    if product_info["DiscountOffer"] == '' or product_info["DiscountPrice (in Rs)"] == '':
+                        product_info.pop("DiscountPrice (in Rs)", None)
+                        product_info.pop("DiscountOffer", None)
+                        product_info["Price"] = int(product_info.pop("OriginalPrice (in Rs)"))
+                    else:
+                        product_info["Price"] = int(product_info["DiscountPrice (in Rs)"])
+                        product_info.pop("OriginalPrice (in Rs)", None)
+                        product_info.pop("DiscountPrice (in Rs)", None)
+                        product_info.pop("DiscountOffer", None)
 
-                        product_info["ImageURL"] = get_image_link(product_info["URL"])
-                        finResp.append(product_info)
+                    product_info["ImageURL"] = get_image_link(product_info["URL"])
+                    finResp.append(product_info)
 
-                read_file.close()
-                                    
-                print(finResp)
-                return jsonify({"response":finResp}),200
+            return jsonify({"response": finResp}), 200
 
-chat = model.start_chat(history=[])
-lastMsg =  ""
-@app.route('/chat',methods=['POST','GET'])
+chat_history = []
+@app.route('/chat', methods=['POST', 'GET'])
 def chatbot_response():
-        global lastMsg
-        if request.method == 'POST':
-            data = request.json
-            prompt = data.get("message","")
+    global chat_history
+    if request.method == 'POST':
+        data = request.json
+        prompt = data.get("message", "")
 
-            response = chat.send_message(f"{prompt}", stream = False)
-            response_text = response.text
+        chat_history.append({"role": "user", "content": prompt})
+        full_prompt = "\n".join([f"{msg['role']}: {msg['content']}" for msg in chat_history])
 
-            return jsonify({"message":response_text}),200
-        
-        if request.method == "GET":
-            history = serializer(chat.history)
-            text_sections = re.findall(r'parts\s*{\s*text:\s*"([^"]+)"\s*}', history)
-            
-            last_text_section = text_sections[-1]
+        response = llama(full_prompt, max_tokens=200)
+        response_text = response['choices'][0]['text'].strip()
 
-            if last_text_section != "":
-                queryEmbed = get_embedding(last_text_section)
-                similarVectors = index.query(
-                                namespace="ns1",
-                                vector=queryEmbed,
-                                top_k=20,
-                                include_values=False,
-                                include_metadata=True
-                            )
+        chat_history.append({"role": "assistant", "content": response_text})
 
-                lst = []
-                read_file = open('../data/OGMyntraFasionClothing.json', 'r')
+        return jsonify({"message": response_text}), 200
+    
+    if request.method == "GET":
+        last_text_section = chat_history[-1]['content'] if chat_history else ""
+
+        if last_text_section != "":
+            queryEmbed = get_embedding(last_text_section)
+            similarVectors = index.query(
+                namespace="ns1",
+                vector=queryEmbed,
+                top_k=20,
+                include_values=False,
+                include_metadata=True
+            )
+
+            lst = []
+            with open('../data/OGMyntraFasionClothing.json', 'r') as read_file:
                 data = json.load(read_file)
                 for result in similarVectors['matches']:
                     product_id_to_find = result['id']
@@ -213,9 +197,9 @@ def chatbot_response():
                         product_info.pop("URL", None)
                         lst.append(product_info)
 
-            return jsonify({"response":lst}),200
-        
-@app.route('/imagecapture',methods=['POST'])
+        return jsonify({"response": lst}), 200
+
+@app.route('/imagecapture', methods=['POST'])
 def process_image():
     if request.method == 'POST':
         content = request.json
@@ -223,48 +207,47 @@ def process_image():
         imgUri = imgUri[23:]
         text = content.get("text", "")
         
-        modelVision = genai.GenerativeModel(model_name="gemini-pro-vision")
         decoded_image = io.BytesIO(base64.b64decode(imgUri))
         img = Image.open(decoded_image)
 
-        prompt = [f'{text}', img]
-        image_description =  modelVision.generate_content(prompt)
-        image_description = image_description.text
+        # Note: Llama 2 doesn't have built-in image processing capabilities.
+        # You might need to use a different model or service for image description.
+        # For now, we'll use the text as the description.
+        image_description = text
+
         queryEmbed = get_embedding(image_description)
 
         similarVectors = index.query(
-                    namespace="ns1",
-                    vector=queryEmbed,
-                    top_k=20,
-                    include_values=False,
-                    include_metadata=True
-                )
+            namespace="ns1",
+            vector=queryEmbed,
+            top_k=20,
+            include_values=False,
+            include_metadata=True
+        )
                 
         lst = []
-        read_file = open('../data/OGMyntraFasionClothing.json', 'r')
-        data = json.load(read_file)
-        for result in similarVectors['matches']:
-            product_id_to_find = result['id']
-            product_info = find_product_info(product_id_to_find, data)
+        with open('../data/OGMyntraFasionClothing.json', 'r') as read_file:
+            data = json.load(read_file)
+            for result in similarVectors['matches']:
+                product_id_to_find = result['id']
+                product_info = find_product_info(product_id_to_find, data)
                             
-            if product_info:
-                if product_info["DiscountOffer"] == '' or product_info["DiscountPrice (in Rs)"] == '':
-                    product_info.pop("DiscountPrice (in Rs)", None)
-                    product_info.pop("DiscountOffer", None)
-                    product_info["Price"] = product_info.pop("OriginalPrice (in Rs)")
-                else:
-                    product_info["Price"] = int(product_info["DiscountPrice (in Rs)"])
-                    product_info.pop("OriginalPrice (in Rs)", None)
-                    product_info.pop("DiscountPrice (in Rs)", None)
-                    product_info.pop("DiscountOffer", None)
+                if product_info:
+                    if product_info["DiscountOffer"] == '' or product_info["DiscountPrice (in Rs)"] == '':
+                        product_info.pop("DiscountPrice (in Rs)", None)
+                        product_info.pop("DiscountOffer", None)
+                        product_info["Price"] = product_info.pop("OriginalPrice (in Rs)")
+                    else:
+                        product_info["Price"] = int(product_info["DiscountPrice (in Rs)"])
+                        product_info.pop("OriginalPrice (in Rs)", None)
+                        product_info.pop("DiscountPrice (in Rs)", None)
+                        product_info.pop("DiscountOffer", None)
                             
-                product_info["ImageURL"] = get_image_link(product_info["URL"])
-                product_info.pop("URL", None)
-                lst.append(product_info)
+                    product_info["ImageURL"] = get_image_link(product_info["URL"])
+                    product_info.pop("URL", None)
+                    lst.append(product_info)
 
-        return jsonify({"response":lst}),200
-
-    
+        return jsonify({"response": lst}), 200
 
 if __name__ == "__main__":
     app.run(debug=True, host="0.0.0.0")
