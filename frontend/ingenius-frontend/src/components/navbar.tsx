@@ -20,15 +20,15 @@ export default function Navbar() {
   ];
 
   return (
-    <nav className="w-full md:h-[75px] border-b shadow">
+    <nav className="w-full bg-gray-900 border-b border-gray-800">
       <div className="items-center px-4 max-w-screen-xl mx-auto md:flex md:px-8">
         <div className="flex items-center justify-between py-3 md:py-5 md:block">
           <Link href="/">
-            <h1 className="text-3xl font-bold text-primary">AlienWear</h1>
+            <h1 className="text-3xl font-bold text-white">AlienWear</h1>
           </Link>
           <div className="md:hidden">
             <button
-              className="text-gray-700 outline-none p-2 rounded-md focus:border-gray-400 focus:border"
+              className="text-white outline-none p-2 rounded-md focus:border-gray-400 focus:border"
               onClick={() => setState(!state)}
             >
               <Menu />
@@ -42,20 +42,17 @@ export default function Navbar() {
         >
           <ul className="justify-end items-center space-y-8 md:flex md:space-x-6 md:space-y-0">
             {menus.map((item, idx) => (
-              <li key={idx} className="hover:text-blue-500">
+              <li key={idx} className="text-white hover:text-blue-400 transition-colors">
                 <Link href={item.path}>{item.title}</Link>
               </li>
             ))}
             <li>
-              {/* {status !== "authenticated" && ( */}
               <Link href="/login">
-                <Button>Log In</Button>
+                <Button className="bg-white text-gray-900 hover:bg-gray-100">Log In</Button>
               </Link>
-              {/* )} */}
-              {/* {status === "authenticated" && <UserAvatar />} */}
             </li>
             <Link href="/cart">
-              <Button variant="ghost" size="icon">
+              <Button variant="ghost" size="icon" className="text-white hover:bg-gray-800">
                 <ShoppingCart />
               </Button>
             </Link>
