@@ -1,82 +1,76 @@
-from flask import Flask,request,jsonify
-import json
+from fastapi import FastAPI, Request, Query
+from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel
 from openai import OpenAI
-from pinecone import Pinecone, ServerlessSpec
+from pinecone import Pinecone
 import google.generativeai as genai
 from bs4 import BeautifulSoup
-import requests
-from flask_cors import CORS
-import re
 from PIL import Image
-import io
-import base64
 from dotenv import load_dotenv, dotenv_values
+import requests, json, io, base64, re
 
+app = FastAPI(title="AlienWear Backend")
 
 load_dotenv()
+env_var = dotenv_values(".env")
 
-env_var = dotenv_values('.env')
 pineconeKey = env_var.get("PINECONE_API_KEY")
-openAiApiKey = env_var.get('OPENAI_API_KEY')
-geminiApiKey = env_var.get('GEMINI_API_KEY')
+openAiApiKey = env_var.get("OPENAI_API_KEY")
+geminiApiKey = env_var.get("GEMINI_API_KEY")
 
 pc = Pinecone(api_key=pineconeKey)
 openAiClient = OpenAI(api_key=openAiApiKey)
-geminiClient = genai.configure(api_key=geminiApiKey)
+genai.configure(api_key=geminiApiKey)
+
+model = genai.GenerativeModel("gemini-pro")
+index = pc.Index("alien-wear-threehundred")
+
+app = FastAPI(title="AlienWear Backend")
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 
-
-model = genai.GenerativeModel('gemini-pro')
-
-
-index_name = "alien-wear-threehundred"
-index = pc.Index(index_name)
-
-app = Flask("backend")
-CORS(app)
-
-def get_embedding(query,model = "text-embedding-3-small"):
-    return openAiClient.embeddings.create(input=[query], model = model).data[0].embedding
+def get_embedding(query, model="text-embedding-3-small"):
+    return openAiClient.embeddings.create(input=[query], model=model).data[0].embedding
 
 
 def get_image_link(url):
     headers = {
-        'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_14_5) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/84.0.4147.89 Safari/537.36'
+        "User-Agent": (
+            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_14_5)"
+            " AppleWebKit/537.36 (KHTML, like Gecko)"
+            " Chrome/84.0.4147.89 Safari/537.36"
+        )
     }
     try:
         res = requests.get(url, headers=headers, verify=False)
         soup = BeautifulSoup(res.text, "lxml")
-        script = None
-        for s in soup.find_all("script"):
-            if 'pdpData' in s.text:
-                script = s.get_text(strip=True)
-                break
-        json_data = json.loads(script[script.index('{'):])
-        image_link = json_data["pdpData"]["media"]["albums"][0]["images"][0]["imageURL"]
-        return image_link
+        script = next((s.get_text(strip=True) for s in soup.find_all("script") if "pdpData" in s.text), None)
+        if not script:
+            return None
+        json_data = json.loads(script[script.index("{"):])
+        return json_data["pdpData"]["media"]["albums"][0]["images"][0]["imageURL"]
     except Exception as e:
         print(f"Error fetching image for URL {url}: {e}")
         return None
 
 
-def process_products(product_info,originalQuery):
-    responseGen = model.generate_content(f''' For the Query : {originalQuery}
-
-                                        {product_info}
-                                        Keeping the above vector as context and the following 
-                                         can you filter out the best 6 results and return me the product IDs of the Top 6 products.
-                                         Let the format be space separated product ids only.
-                                          ''')
-    
-    print(product_info)
-    respContent = responseGen.text
-    respContent = respContent.split()
-    print(respContent)
-    return respContent
+def process_products(product_info, original_query):
+    response = model.generate_content(
+        f"For the Query: {original_query}\n\n{product_info}\n"
+        "Filter and return the top 6 Product IDs as space-separated values."
+    )
+    return response.text.split()
 
 
 def find_product_info(product_id, data):
-    for item in data:    
+    for item in data:
         if item["Product_id"] == product_id:
             return {
                 "Product_id": item.get("Product_id", ""),
@@ -84,187 +78,127 @@ def find_product_info(product_id, data):
                 "OriginalPrice (in Rs)": item.get("OriginalPrice (in Rs)", ""),
                 "DiscountOffer": item.get("DiscountOffer", ""),
                 "URL": item.get("URL", ""),
-                "Description": item.get("Description", "")
+                "Description": item.get("Description", ""),
             }
     return None
 
-def serializer(obj):
-    if hasattr(obj, "__dict__"):
-        return obj.__dict__
-    
-    return str(obj)
 
-@app.route('/occasion',methods=['GET'])
-def process_occasion():
-        if request.method == 'GET':
-            originQuery = request.args.get("query","")
-            if originQuery != "":
-                queryEmbed = get_embedding(originQuery)
-                similarVectors = index.query(
-                                namespace="ns1",
-                                vector=queryEmbed,
-                                top_k=30,
-                                include_values=False,
-                                include_metadata=True
-                            )
+def normalize_product_info(product_info):
+    if not product_info.get("DiscountPrice (in Rs)") or not product_info.get("DiscountOffer"):
+        product_info.pop("DiscountPrice (in Rs)", None)
+        product_info.pop("DiscountOffer", None)
+        product_info["Price"] = int(product_info.pop("OriginalPrice (in Rs)", 0))
+    else:
+        product_info["Price"] = int(product_info.pop("DiscountPrice (in Rs)", 0))
+        product_info.pop("OriginalPrice (in Rs)", None)
+        product_info.pop("DiscountOffer", None)
+    return product_info
 
-                lst = []
-                read_file = open('../data/OGMyntraFasionClothing.json', 'r')
-                data = json.load(read_file)
-                for result in similarVectors['matches']:
-                    product_id_to_find = result['id']
-                    product_info = find_product_info(product_id_to_find, data)
-                    product_info.pop("URL", None)
-                    product_info.pop("Description", None)
-                        
-                    if product_info:
-                        if product_info["DiscountOffer"] == '' or product_info["DiscountPrice (in Rs)"] == '':
-                            product_info.pop("DiscountPrice (in Rs)", None)
-                            product_info.pop("DiscountOffer", None)
-                            product_info["Price"] = product_info.pop("OriginalPrice (in Rs)")
-                        else:
-                            product_info["Price"] = int(product_info["DiscountPrice (in Rs)"])
-                            product_info.pop("OriginalPrice (in Rs)", None)
-                            product_info.pop("DiscountPrice (in Rs)", None)
-                            product_info.pop("DiscountOffer", None)
 
-                        for i in result["metadata"]:
-                            product_info[i] = result["metadata"][i]
+@app.get("/occasion")
+def process_occasion(query: str = Query(...)):
+    query_embed = get_embedding(query)
+    similar = index.query(namespace="ns1", vector=query_embed, top_k=30, include_metadata=True)
 
-                        product_info["Product_id"] = product_id_to_find
-                        lst.append(product_info)
-                    else:
-                        print("Product not found.")
+    with open("../data/OGMyntraFasionClothing.json", "r") as f:
+        data = json.load(f)
 
-                finResp = []
-                resp = process_products(lst,originQuery)
-                print(resp)
-                for items in resp:
-                    product_info = find_product_info(items, data)
+    items = []
+    for result in similar["matches"]:
+        product = find_product_info(result["id"], data)
+        if not product:
+            continue
+        product = normalize_product_info(product)
+        product.update(result["metadata"])
+        product["Product_id"] = result["id"]
+        items.append(product)
 
-                    if product_info:
-                        if product_info["DiscountOffer"] == '' or product_info["DiscountPrice (in Rs)"] == '':
-                            product_info.pop("DiscountPrice (in Rs)", None)
-                            product_info.pop("DiscountOffer", None)
-                            product_info["Price"] = int(product_info.pop("OriginalPrice (in Rs)"))
-                        else:
-                            product_info["Price"] = int(product_info["DiscountPrice (in Rs)"])
-                            product_info.pop("OriginalPrice (in Rs)", None)
-                            product_info.pop("DiscountPrice (in Rs)", None)
-                            product_info.pop("DiscountOffer", None)
+    top_ids = process_products(items, query)
+    final_results = []
+    for pid in top_ids:
+        product = find_product_info(pid, data)
+        if not product:
+            continue
+        product = normalize_product_info(product)
+        product["ImageURL"] = get_image_link(product["URL"])
+        final_results.append(product)
 
-                        product_info["ImageURL"] = get_image_link(product_info["URL"])
-                        finResp.append(product_info)
+    return {"response": final_results}
 
-                read_file.close()
-                                    
-                print(finResp)
-                return jsonify({"response":finResp}),200
+
+class ChatMessage(BaseModel):
+    message: str
+
 
 chat = model.start_chat(history=[])
-lastMsg =  ""
-@app.route('/chat',methods=['POST','GET'])
-def chatbot_response():
-        global lastMsg
-        if request.method == 'POST':
-            data = request.json
-            prompt = data.get("message","")
 
-            response = chat.send_message(f"{prompt}", stream = False)
-            response_text = response.text
 
-            return jsonify({"message":response_text}),200
-        
-        if request.method == "GET":
-            history = serializer(chat.history)
-            text_sections = re.findall(r'parts\s*{\s*text:\s*"([^"]+)"\s*}', history)
-            
-            last_text_section = text_sections[-1]
+@app.post("/chat")
+def chatbot_response(body: ChatMessage):
+    response = chat.send_message(body.message, stream=False)
+    return {"message": response.text}
 
-            if last_text_section != "":
-                queryEmbed = get_embedding(last_text_section)
-                similarVectors = index.query(
-                                namespace="ns1",
-                                vector=queryEmbed,
-                                top_k=20,
-                                include_values=False,
-                                include_metadata=True
-                            )
 
-                lst = []
-                read_file = open('../data/OGMyntraFasionClothing.json', 'r')
-                data = json.load(read_file)
-                for result in similarVectors['matches']:
-                    product_id_to_find = result['id']
-                    product_info = find_product_info(product_id_to_find, data)
-                        
-                    if product_info:
-                        if product_info["DiscountOffer"] == '' or product_info["DiscountPrice (in Rs)"] == '':
-                            product_info.pop("DiscountPrice (in Rs)", None)
-                            product_info.pop("DiscountOffer", None)
-                            product_info["Price"] = product_info.pop("OriginalPrice (in Rs)")
-                        else:
-                            product_info["Price"] = int(product_info["DiscountPrice (in Rs)"])
-                            product_info.pop("OriginalPrice (in Rs)", None)
-                            product_info.pop("DiscountPrice (in Rs)", None)
-                            product_info.pop("DiscountOffer", None)
-                        
-                        product_info["ImageURL"] = get_image_link(product_info["URL"])
-                        product_info.pop("URL", None)
-                        lst.append(product_info)
+@app.get("/chat")
+def chat_recommendations():
+    history = str(chat.history)
+    matches = re.findall(r'parts\s*{\s*text:\s*"([^"]+)"\s*}', history)
+    if not matches:
+        return {"response": []}
 
-            return jsonify({"response":lst}),200
-        
-@app.route('/imagecapture',methods=['POST'])
-def process_image():
-    if request.method == 'POST':
-        content = request.json
-        imgUri = content.get("imgURI", "")
-        imgUri = imgUri[23:]
-        text = content.get("text", "")
-        
-        modelVision = genai.GenerativeModel(model_name="gemini-pro-vision")
-        decoded_image = io.BytesIO(base64.b64decode(imgUri))
-        img = Image.open(decoded_image)
+    last_text = matches[-1]
+    query_embed = get_embedding(last_text)
+    similar = index.query(namespace="ns1", vector=query_embed, top_k=20, include_metadata=True)
 
-        prompt = [f'{text}', img]
-        image_description =  modelVision.generate_content(prompt)
-        image_description = image_description.text
-        queryEmbed = get_embedding(image_description)
+    with open("../data/OGMyntraFasionClothing.json", "r") as f:
+        data = json.load(f)
 
-        similarVectors = index.query(
-                    namespace="ns1",
-                    vector=queryEmbed,
-                    top_k=20,
-                    include_values=False,
-                    include_metadata=True
-                )
-                
-        lst = []
-        read_file = open('../data/OGMyntraFasionClothing.json', 'r')
-        data = json.load(read_file)
-        for result in similarVectors['matches']:
-            product_id_to_find = result['id']
-            product_info = find_product_info(product_id_to_find, data)
-                            
-            if product_info:
-                if product_info["DiscountOffer"] == '' or product_info["DiscountPrice (in Rs)"] == '':
-                    product_info.pop("DiscountPrice (in Rs)", None)
-                    product_info.pop("DiscountOffer", None)
-                    product_info["Price"] = product_info.pop("OriginalPrice (in Rs)")
-                else:
-                    product_info["Price"] = int(product_info["DiscountPrice (in Rs)"])
-                    product_info.pop("OriginalPrice (in Rs)", None)
-                    product_info.pop("DiscountPrice (in Rs)", None)
-                    product_info.pop("DiscountOffer", None)
-                            
-                product_info["ImageURL"] = get_image_link(product_info["URL"])
-                product_info.pop("URL", None)
-                lst.append(product_info)
+    results = []
+    for result in similar["matches"]:
+        product = find_product_info(result["id"], data)
+        if not product:
+            continue
+        product = normalize_product_info(product)
+        product["ImageURL"] = get_image_link(product["URL"])
+        product.pop("URL", None)
+        results.append(product)
 
-        return jsonify({"response":lst}),200
+    return {"response": results}
 
-    
 
-if __name__ == "__main__":
-    app.run(debug=True, host="0.0.0.0")
+class ImageRequest(BaseModel):
+    imgURI: str
+    text: str = ""
+
+
+@app.post("/imagecapture")
+def process_image(body: ImageRequest):
+    img_data = body.imgURI[23:]
+    decoded = io.BytesIO(base64.b64decode(img_data))
+    img = Image.open(decoded)
+
+    model_vision = genai.GenerativeModel("gemini-pro-vision")
+    prompt = [body.text, img]
+    description = model_vision.generate_content(prompt).text
+    query_embed = get_embedding(description)
+
+    similar = index.query(namespace="ns1", vector=query_embed, top_k=20, include_metadata=True)
+    with open("../data/OGMyntraFasionClothing.json", "r") as f:
+        data = json.load(f)
+
+    results = []
+    for result in similar["matches"]:
+        product = find_product_info(result["id"], data)
+        if not product:
+            continue
+        product = normalize_product_info(product)
+        product["ImageURL"] = get_image_link(product["URL"])
+        product.pop("URL", None)
+        results.append(product)
+
+    return {"response": results}
+
+
+@app.get("/")
+def home():
+    return {"message": "AlienWear FastAPI backend running"}
